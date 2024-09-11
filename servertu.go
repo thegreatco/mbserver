@@ -59,7 +59,8 @@ SkipFrameError:
 				//return
 			}
 
-			if frame.Address != address {
+			// If the frame is not a broadcast, check the address.
+			if frame.Address != 0 && frame.Address != address {
 				log.Printf("slave id mismatch %v, ignoring message\n", frame.Address)
 				continue
 			}
