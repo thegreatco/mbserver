@@ -14,6 +14,15 @@ func (s *Server) ListenRTU(serialConfig *serial.Config, address uint8) (err erro
 	if err != nil {
 		log.Fatalf("failed to open %s: %v\n", serialConfig.Address, err)
 	}
+
+	// flush the read buffer on startup
+	_, err = port.Read(make([]byte, 512))
+	if err != nil {
+		if err != serial.ErrTimeout {
+			log.Fatalf("failed to flush read buffer for %s: %v\n", serialConfig.Address, err)
+		}
+		err = nil
+	}
 	s.ports = append(s.ports, port)
 
 	s.portsWG.Add(1)
@@ -38,6 +47,10 @@ SkipFrameError:
 
 		bytesRead, err := port.Read(buffer)
 		if err != nil {
+			// We just want to eat the timeout error and keep trying to handle requests.
+			if err == serial.ErrTimeout {
+				continue
+			}
 			if err != io.EOF {
 				log.Printf("serial read error %v\n", err)
 			}

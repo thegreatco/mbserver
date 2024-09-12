@@ -91,7 +91,12 @@ func (s *Server) handler() {
 		request := <-s.requestChan
 		response := s.handle(request)
 		// TODO: don't respond to broadcast messages
-		request.conn.Write(response.Bytes())
+		b := response.Bytes()
+		if b == nil {
+			continue
+		} else {
+			request.conn.Write(b)
+		}
 	}
 }
 
