@@ -1,8 +1,10 @@
 package mbserver
 
 import (
+	"errors"
 	"io"
 	"log"
+	"time"
 
 	"github.com/goburrow/serial"
 )
@@ -35,6 +37,14 @@ func (s *Server) ListenRTU(serialConfig *serial.Config, address uint8) (err erro
 }
 
 func (s *Server) acceptSerialRequests(port serial.Port, address uint8) {
+	const charTimeMicros = 750
+	const charTimeout = (charTimeMicros * 1.5) * time.Microsecond
+	const packetTimeout = 3 * charTimeMicros * time.Microsecond
+	charTimer := time.NewTimer(charTimeout)
+	packetTimer := time.NewTimer(packetTimeout)
+	defer charTimer.Stop()
+	defer packetTimer.Stop()
+
 SkipFrameError:
 	for {
 		select {
@@ -43,9 +53,11 @@ SkipFrameError:
 		default:
 		}
 
-		buffer := make([]byte, 512)
+		messageBuffer := make([]byte, 512)
+		b := make([]byte, 1)
 
-		bytesRead, err := port.Read(buffer)
+		// first, try to read a byte, waiting for the first byte in the message
+		bytesRead, err := port.Read(b)
 		if err != nil {
 			// We just want to eat the timeout error and keep trying to handle requests.
 			if err == serial.ErrTimeout {
@@ -57,30 +69,70 @@ SkipFrameError:
 			return
 		}
 
-		if bytesRead != 0 {
+		if bytesRead == 0 {
+			continue
+		}
 
-			// Set the length of the packet to the number of read bytes.
-			packet := buffer[:bytesRead]
-
-			frame, err := NewRTUFrame(packet)
-			if err != nil {
-				log.Printf("bad serial frame error %v\n", err)
-				//The next line prevents RTU server from exiting when it receives a bad frame. Simply discard the erroneous
-				//frame and wait for next frame by jumping back to the beginning of the 'for' loop.
-				log.Printf("Keep the RTU server running!!\n")
-				continue SkipFrameError
-				//return
+		if bytesRead == 1 {
+			// If we read a byte, start the timer for the packet.
+			charTimer.Reset(charTimeout)
+			packetTimer.Reset(packetTimeout)
+			messageBuffer[0] = b[0]
+			i := 1
+			for {
+				b, err := readByte(port, *charTimer, charTimeout)
+				if err == errRtuCharTimeout {
+					select {
+					case <-packetTimer.C:
+						messageBuffer[i] = b
+						handleFrame(messageBuffer[:i], port, address, s.requestChan)
+						break
+					case <-charTimer.C:
+						continue SkipFrameError
+					}
+				}
+				if err != nil {
+					log.Printf("error reading byte: %v\n", err)
+					continue SkipFrameError
+				}
+				messageBuffer[i] = b
 			}
-
-			// If the frame is not a broadcast, check the address.
-			if frame.Address != 0 && frame.Address != address {
-				log.Printf("slave id mismatch %v, ignoring message\n", frame.Address)
-				continue
-			}
-
-			request := &Request{port, frame}
-
-			s.requestChan <- request
 		}
 	}
+}
+
+var errRtuCharTimeout = errors.New("timeout waiting for next byte")
+
+func readByte(port serial.Port, charTimer time.Timer, charTimeout time.Duration) (byte, error) {
+	b := make([]byte, 1)
+	_, err := port.Read(b)
+	if err != nil {
+		return 0, err
+	}
+	select {
+	case <-charTimer.C:
+		log.Printf("error: more than 750 microseconds passed between bytes received")
+		return 0, errRtuCharTimeout
+	default:
+		charTimer.Reset(charTimeout)
+		return b[0], nil
+	}
+}
+
+func handleFrame(packet []byte, port serial.Port, address uint8, requestChan chan *Request) {
+	frame, err := NewRTUFrame(packet)
+	if err != nil {
+		log.Printf("bad serial frame error %v\n", err)
+		return
+	}
+
+	// If the frame is not a broadcast, check the address.
+	if frame.Address != 0 && frame.Address != address {
+		log.Printf("slave id mismatch %v, ignoring message\n", frame.Address)
+		return
+	}
+
+	request := &Request{port, frame}
+
+	requestChan <- request
 }
