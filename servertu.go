@@ -125,7 +125,7 @@ func (p *rtuPacket) appendData(b byte) (bool, error) {
 
 // ListenRTU starts the Modbus server listening to a serial device.
 // For example:  err := s.ListenRTU(&serial.Config{Address: "/dev/ttyUSB0"})
-func (s *Server) ListenRTU(serialConfig *serial.Config) (err error) {
+func (s *Server) ListenRTU(serialConfig *serial.Config, slaveId uint8) (err error) {
 	port, err := serial.Open(serialConfig)
 	if err != nil {
 		log.Fatalf("failed to open %s: %v\n", serialConfig.Address, err)
@@ -135,13 +135,13 @@ func (s *Server) ListenRTU(serialConfig *serial.Config) (err error) {
 	s.portsWG.Add(1)
 	go func() {
 		defer s.portsWG.Done()
-		s.acceptSerialRequests(port)
+		s.acceptSerialRequests(port, slaveId)
 	}()
 
 	return err
 }
 
-func (s *Server) acceptSerialRequests(port serial.Port) {
+func (s *Server) acceptSerialRequests(port serial.Port, slaveId uint8) {
 	b := make([]byte, 1)
 	var packet *rtuPacket
 	for {
@@ -165,7 +165,7 @@ func (s *Server) acceptSerialRequests(port serial.Port) {
 		if bytesRead == 1 {
 			if packet == nil {
 				packet = newRtuPacket(b[0])
-				if packet.address != 0x5b {
+				if packet.address != slaveId {
 					packet = nil
 					continue
 				}
