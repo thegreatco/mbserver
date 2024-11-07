@@ -57,7 +57,6 @@ func NewServer() *Server {
 	s.portsCloseChan = make(chan struct{})
 	s.handlerCloseChan = make(chan struct{})
 
-	s.handlerWG.Add(1)
 	go s.handler()
 
 	return s
@@ -91,15 +90,16 @@ func (s *Server) handle(request *Request) Framer {
 
 // All requests are handled synchronously to prevent modbus memory corruption.
 func (s *Server) handler() {
+	s.handlerWG.Add(1)
+	defer s.handlerWG.Done()
 	for {
 		select {
 		case <-s.handlerCloseChan:
 			return
-		default:
+		case request := <-s.requestChan:
+			response := s.handle(request)
+			request.conn.Write(response.Bytes())
 		}
-		request := <-s.requestChan
-		response := s.handle(request)
-		request.conn.Write(response.Bytes())
 	}
 }
 
