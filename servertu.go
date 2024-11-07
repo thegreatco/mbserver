@@ -145,6 +145,11 @@ func (s *Server) acceptSerialRequests(port serial.Port, slaveId uint8) {
 	b := make([]byte, 1)
 	var packet *rtuPacket
 	for {
+		select {
+		case <-s.portsCloseChan:
+			return
+		default:
+		}
 		bytesRead, err := port.Read(b)
 		if err != nil {
 			if err == serial.ErrTimeout {
