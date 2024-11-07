@@ -17,6 +17,7 @@ type Server struct {
 	ports            []serial.Port
 	portsWG          sync.WaitGroup
 	portsCloseChan   chan struct{}
+	handlerCloseChan chan struct{}
 	requestChan      chan *Request
 	function         [256](func(*Server, Framer) ([]byte, *Exception))
 	DiscreteInputs   []byte
@@ -53,6 +54,7 @@ func NewServer() *Server {
 
 	s.requestChan = make(chan *Request)
 	s.portsCloseChan = make(chan struct{})
+	s.handlerCloseChan = make(chan struct{})
 
 	go s.handler()
 
@@ -88,6 +90,11 @@ func (s *Server) handle(request *Request) Framer {
 // All requests are handled synchronously to prevent modbus memory corruption.
 func (s *Server) handler() {
 	for {
+		select {
+		case <-s.handlerCloseChan:
+			return
+		default:
+		}
 		request := <-s.requestChan
 		response := s.handle(request)
 		request.conn.Write(response.Bytes())
