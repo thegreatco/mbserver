@@ -17,6 +17,7 @@ type Server struct {
 	ports            []serial.Port
 	portsWG          sync.WaitGroup
 	portsCloseChan   chan struct{}
+	handlerWG        sync.WaitGroup
 	handlerCloseChan chan struct{}
 	requestChan      chan *Request
 	function         [256](func(*Server, Framer) ([]byte, *Exception))
@@ -56,6 +57,7 @@ func NewServer() *Server {
 	s.portsCloseChan = make(chan struct{})
 	s.handlerCloseChan = make(chan struct{})
 
+	s.handlerWG.Add(1)
 	go s.handler()
 
 	return s
@@ -109,6 +111,9 @@ func (s *Server) Close() {
 
 	close(s.portsCloseChan)
 	s.portsWG.Wait()
+
+	close(s.handlerCloseChan)
+	s.handlerWG.Wait()
 
 	for _, port := range s.ports {
 		port.Close()
