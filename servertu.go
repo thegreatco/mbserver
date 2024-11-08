@@ -1,11 +1,16 @@
 package mbserver
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"log"
 
 	"github.com/goburrow/serial"
+)
+
+var (
+	ErrUnknownFunctionCode = errors.New("unknown function code")
 )
 
 type rtuPacket struct {
@@ -120,12 +125,12 @@ func (p *rtuPacket) appendData(b byte) (bool, error) {
 	case 16:
 		return p.appendWriteMultipleRegistersData(b), nil
 	}
-	return false, fmt.Errorf("unknown function code % x", p.functionCode)
+	return false, errors.Join(ErrUnknownFunctionCode, fmt.Errorf("unknown function code % x", p.functionCode))
 }
 
 // ListenRTU starts the Modbus server listening to a serial device.
 // For example:  err := s.ListenRTU(&serial.Config{Address: "/dev/ttyUSB0"})
-func (s *Server) ListenRTU(serialConfig *serial.Config, slaveId uint8) (err error) {
+func (s *Server) ListenRTU(serialConfig *serial.Config, slaveId uint8, debugLogs bool) (err error) {
 	port, err := serial.Open(serialConfig)
 	if err != nil {
 		log.Fatalf("failed to open %s: %v\n", serialConfig.Address, err)
@@ -135,13 +140,13 @@ func (s *Server) ListenRTU(serialConfig *serial.Config, slaveId uint8) (err erro
 	s.portsWG.Add(1)
 	go func() {
 		defer s.portsWG.Done()
-		s.acceptSerialRequests(port, slaveId)
+		s.acceptSerialRequests(port, slaveId, debugLogs)
 	}()
 
 	return err
 }
 
-func (s *Server) acceptSerialRequests(port serial.Port, slaveId uint8) {
+func (s *Server) acceptSerialRequests(port serial.Port, slaveId uint8, debugLogs bool) {
 	b := make([]byte, 1)
 	var packet *rtuPacket
 	for {
@@ -176,6 +181,10 @@ func (s *Server) acceptSerialRequests(port serial.Port, slaveId uint8) {
 				}
 			} else {
 				res, err := packet.appendData(b[0])
+				if errors.Is(err, ErrUnknownFunctionCode) && debugLogs == false {
+					packet = nil
+					continue
+				}
 				if err != nil {
 					log.Printf("error appending data: %v\n", err)
 					packet = nil
@@ -183,6 +192,10 @@ func (s *Server) acceptSerialRequests(port serial.Port, slaveId uint8) {
 				}
 				if res {
 					frame, err := NewRTUFrame(packet.Data())
+					if errors.Is(err, ErrBadCrc) && debugLogs == false {
+						packet = nil
+						continue
+					}
 					if err != nil {
 						log.Printf("bad serial frame error %v\n", err)
 						packet = nil
